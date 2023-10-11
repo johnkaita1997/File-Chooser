@@ -1,43 +1,31 @@
 package com.tafatalkstudent.Activities
 
-import android.Manifest
 import android.annotation.SuppressLint
-import android.content.DialogInterface
+import android.content.ContentResolver
 import android.content.Intent
-import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.Handler
-import android.provider.Settings
-import android.widget.Button
-import android.widget.LinearLayout
-import androidx.activity.viewModels
+import android.webkit.MimeTypeMap
 import androidx.annotation.RequiresApi
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.app.ActivityCompat
 import androidx.lifecycle.LifecycleOwner
-import com.tafatalkstudent.R
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.storage.FirebaseStorage
+import com.google.firebase.storage.StorageReference
+import com.google.firebase.storage.StorageTask
 import com.tafatalkstudent.Shared.*
-import com.tafatalkstudent.Shared.Constants.mainScope
-import com.tafatalkstudent.Shared.Constants.permission_request
 import com.tafatalkstudent.databinding.LauncherActivityBinding
-import dagger.hilt.android.AndroidEntryPoint
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 
 
-@AndroidEntryPoint
 class LauncherActivity : AppCompatActivity(), LifecycleOwner {
 
     private lateinit var binding: LauncherActivityBinding
-    lateinit var handler: Handler
-    lateinit var runnable: Runnable
-    private val viewmodel: MyViewModel by viewModels()
-    private lateinit var crash: String
-    var cd = ConnectionDetector(this)
+    private lateinit var mAuth: FirebaseAuth
+    private lateinit var mImageUri: Uri
+    private lateinit var mStorageRef: StorageReference
+    private var mUploadTask: StorageTask<*>? = null
+
 
     @RequiresApi(Build.VERSION_CODES.O)
     @SuppressLint("MissingPermission")
@@ -45,122 +33,72 @@ class LauncherActivity : AppCompatActivity(), LifecycleOwner {
         super.onCreate(savedInstanceState)
         binding = LauncherActivityBinding.inflate(layoutInflater)
         setContentView(binding.root)
-
-        ActivityCompat.requestPermissions(this, arrayOf(
-            Manifest.permission.CALL_PHONE,
-            Manifest.permission.KILL_BACKGROUND_PROCESSES,
-            Manifest.permission.READ_CALL_LOG,
-            Manifest.permission.READ_PHONE_STATE,
-            Manifest.permission.READ_CONTACTS,
-            Manifest.permission.ANSWER_PHONE_CALLS,
-            Manifest.permission.READ_CALL_LOG,
-            Manifest.permission.ACCESS_NETWORK_STATE,
-            Manifest.permission.ACCESS_WIFI_STATE,
-        ), permission_request)
+        initall()
     }
 
     private fun initall() {
-        if (issignedIn()) {
-            CoroutineScope(Dispatchers.IO).launch() {
-                delay(2000)
-                mainScope.launch {
-                    goToActivity(this@LauncherActivity, TestActivity::class.java)
-                }
-            }
-        } else {
 
-            CoroutineScope(Dispatchers.IO).launch() {
-                delay(2000)
-                mainScope.launch {
-                    makeGone(binding.loadinglayout)
-                    makeVisible(binding.loginlayout)
-                }
-            }
-        }
+        mAuth = FirebaseAuth.getInstance()
+        mStorageRef = FirebaseStorage.getInstance().getReference("uploads")
 
-        binding.studentsignin.setOnClickListener {
-
-
-            var email = binding.kaemail.text.toString().trim()
-            val password = binding.kapassword.text.toString().trim()
-
-            if (email.length <= 0) {
-                makeLongToast("Enter your email")
-            } else if (password.length <= 0) {
-                makeLongToast("Enter your password")
-            } else {
-                showProgress(this)
-                var updatedemail = when {
-                    email.startsWith("0") -> email.replaceFirst("0", "254")
-                    email.startsWith("+254") -> email.replaceFirst("+254", "254")
-                    else -> email
-                }
-
-                val updatedpassword = when {
-                    password.startsWith("0") -> password.replaceFirst("0", "254")
-                    password.startsWith("+254") -> password.replaceFirst("+254", "254")
-                    else -> password
-                }
-
-                updatedemail = updatedemail + "@gmail.com"
-                CoroutineScope(Dispatchers.IO).launch() {
-                    viewmodel.loginuser(updatedemail, updatedpassword, null, this@LauncherActivity)
-                }
-            }
+        binding.uploadFile.setOnClickListener {
+            openFileChooser()
         }
     }
 
-    private fun internet_connection_error_Dilog() {
-        val alertDialog: android.app.AlertDialog? = android.app.AlertDialog.Builder(this).setTitle("Network Error").setMessage("This application requires an active internet connection.").setIcon(R.drawable.logodark).setPositiveButton("Fix", DialogInterface.OnClickListener { _, _ -> /*  Intent callGPSSettingIntent = new Intent(android.provider.Settings.ACTION_SETTINGS);
-        startActivityForResult(callGPSSettingIntent, 0);*/
-            val intent = Intent(Settings.ACTION_SETTINGS)
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            startActivity(intent)
-        }).setNegativeButton("Dismiss", DialogInterface.OnClickListener { _, _ ->
-            finish()
-            System.exit(0)
-        }).show()
-        val btnPositive: Button? = alertDialog?.getButton(AlertDialog.BUTTON_POSITIVE)
-        val btnNegative: Button? = alertDialog?.getButton(AlertDialog.BUTTON_NEGATIVE)
-        val layoutParams = btnPositive?.layoutParams as LinearLayout.LayoutParams
-        layoutParams.weight = 10f
-        btnPositive.layoutParams = layoutParams
-        btnNegative!!.layoutParams = layoutParams
+
+    private fun openFileChooser() {
+        val intent = Intent()
+        intent.type = "*/*" // Allow all file types
+        intent.action = Intent.ACTION_GET_CONTENT
+        startActivityForResult(intent, 100)
     }
 
 
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
-        when (permission_request) {
-            100 -> if (grantResults[0] == PackageManager.PERMISSION_GRANTED) { //Check for connectivity
-                if (cd.isConnected) {
-                    initall()
-                } else {
-                    internet_connection_error_Dilog()
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == 100 && resultCode == RESULT_OK && data != null && data.data != null) {
+            mImageUri = data.data!!
+            /* imageseleted.setVisibility(View.VISIBLE)
+             PicassoClient.downloadImage(view.getContext(), mImageUri.toString(), imageseleted)*/
+            showProgress(this)
+            uploadFile()
+        }
+    }
+
+
+    private fun uploadFile() {
+
+        val fileReference: StorageReference = mStorageRef.child("${System.currentTimeMillis()}.${getFileExtension(mImageUri)}")
+
+        mUploadTask = fileReference.putFile(mImageUri)
+            .addOnSuccessListener { taskSnapshot ->
+                // Get the download URL from taskSnapshot
+                taskSnapshot.storage.downloadUrl.addOnSuccessListener { uri ->
+                    val downloadUrl = uri.toString()
+                    dismissProgress()
+                    showAlertDialog("Upload successful. Download URL: $downloadUrl")
+
+                    // You can use downloadUrl here for further processing if needed
+                }.addOnFailureListener { e ->
+                    dismissProgress()
+                    showAlertDialog("Failed to get download URL: ${e.message}")
                 }
             }
-            else -> permissionError_Dialog()
-        }
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-    }
+            .addOnFailureListener { e ->
+                dismissProgress()
+                showAlertDialog("Failed ${e}")
+            }
 
-    private fun permissionError_Dialog() {
-        val alertDialog: android.app.AlertDialog? = android.app.AlertDialog.Builder(this).setMessage("This app might malfunction if all the permissions aren't granted.").setCancelable(false).setIcon(R.drawable.logodark).setTitle("Warning").setPositiveButton("Dismiss", DialogInterface.OnClickListener { _, _ -> System.exit(0) }).setNegativeButton("", DialogInterface.OnClickListener { _, _ ->
-            finish()
-            System.exit(0)
-        }).show()
-        val btnPositive = alertDialog?.getButton(AlertDialog.BUTTON_POSITIVE)
-        val layoutParams = btnPositive?.layoutParams as LinearLayout.LayoutParams
-        layoutParams.weight = 10f
-        btnPositive.layoutParams = layoutParams
-    }
-
-    override fun onBackPressed() {
-        val alert = android.app.AlertDialog.Builder(this).setTitle("Tafa Talk").setCancelable(false).setMessage("Are you sure you want to exit").setIcon(R.drawable.logodark)
-            .setPositiveButton("Exit", { dialog, _ ->
-                dialog.dismiss()
-                finish()
-            }).setNegativeButton("Dismis", { dialog, _ -> dialog.dismiss() }).show()
 
     }
+
+
+    private fun getFileExtension(uri: Uri): String? {
+        val contentResolver: ContentResolver = applicationContext.contentResolver
+        val mime = MimeTypeMap.getSingleton()
+        return mime.getExtensionFromMimeType(contentResolver.getType(uri))
+    }
+
 
 }

@@ -1,4 +1,4 @@
-rootProject.name='Bonga Student'
+rootProject.name='File Chooser'
 include ':app'
 
 
